@@ -109,6 +109,39 @@ export const LEVELS: Level[] = [
     ],
     goal: ([a, b]) => [a !== b ? 1 : 0, a === 1 && b === 1 ? 1 : 0],
   },
+  {
+    id: 7,
+    title: '把进位接下去',
+    concept: '全加器 · 芯片复用',
+    description:
+      '工坊升级了：把上一级的进位 Cin 也算进来。可以回到第 6 关封装半加器，再放入两块半加器完成组装。',
+    brief: '计算 A + B + Cin，用 S 和 Cout 表示结果。',
+    allowed: ['NOT', 'AND', 'OR', 'XOR', 'CHIP'],
+    inputs: ['A', 'B', 'Cin'],
+    outputs: ['S', 'Cout'],
+    hints: [
+      '先把 A、B 相加，再把这个和与 Cin 相加。',
+      '两块半加器各自产生一个进位，只要其中一个为 1，Cout 就为 1。',
+      '第一块半加器输入 A、B；第二块输入第一块的 S 和 Cin。第二块的 S 连接结果，两块 C 用或门合并。',
+    ],
+    goal: ([a, b, cin]) => [((a + b + cin) % 2) as Bit, a + b + cin >= 2 ? 1 : 0],
+  },
+  {
+    id: 8,
+    title: '信号分岔口',
+    concept: 'MUX · 数据选择',
+    description: '给下一台计算机装一个信号调度器。用选择开关 Sel，决定把 A 还是 B 送到输出。',
+    brief: 'Sel 为 0 时 Y = A；Sel 为 1 时 Y = B。',
+    allowed: ['NOT', 'AND', 'OR', 'XOR', 'CHIP'],
+    inputs: ['A', 'B', 'Sel'],
+    outputs: ['Y'],
+    hints: [
+      '把问题拆成两条支路：允许 A 通过，或者允许 B 通过。',
+      'A 支路需要 NOT Sel；B 支路需要 Sel。',
+      '连接 (A AND NOT Sel) OR (B AND Sel)。完成后可以封装成自己的 MUX 芯片。',
+    ],
+    goal: ([a, b, sel]) => [sel === 0 ? a : b],
+  },
 ]
 
 export const inputId = (name: string) => `port-in-${name}`

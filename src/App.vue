@@ -4,7 +4,18 @@ import CircuitCanvas from './components/CircuitCanvas.vue'
 import GateSymbol from './components/GateSymbol.vue'
 import Icon from './components/Icon.vue'
 import Modal from './components/Modal.vue'
-import { gateValue, KINDS, MAX_NODES, PARTS, type Bit, type Kind } from './core/circuit'
+import {
+  gateValue,
+  chipValue,
+  compileChip,
+  inputCount,
+  signalKey,
+  KINDS,
+  MAX_NODES,
+  PARTS,
+  type Bit,
+  type Kind,
+} from './core/circuit'
 import { expectedCases, isFixedPort, LEVELS } from './core/levels'
 import { useWorkshop } from './composables/useWorkshop'
 import type { SavedWork } from './core/storage'
@@ -16,6 +27,7 @@ const {
   name,
   completed,
   works,
+  chips,
   motion,
   signals,
   selected,
@@ -44,6 +56,11 @@ const {
   removeSelected,
   renameNode,
   disconnectNode,
+  duplicateSelected,
+  addChip,
+  packageChip,
+  collectChip,
+  deleteChip,
   runTests,
   applyTestInputs,
   saveWork,
@@ -52,13 +69,38 @@ const {
   download,
   importFile,
 } = useWorkshop()
-type ModalName = 'levels' | 'works' | 'help' | 'save' | 'reset' | 'new' | 'success' | 'delete-work' | null
+type ModalName =
+  | 'levels'
+  | 'works'
+  | 'help'
+  | 'save'
+  | 'reset'
+  | 'new'
+  | 'success'
+  | 'delete-work'
+  | 'package'
+  | 'delete-chip'
+  | null
 const modal = ref<ModalName>(null)
 const canvas = ref<InstanceType<typeof CircuitCanvas>>()
 const fileInput = ref<HTMLInputElement>()
 const search = ref('')
-const category = ref<'all' | 'logic' | 'io'>('all')
+const category = ref<'all' | 'logic' | 'io' | 'chips'>('all')
 const saveName = ref('')
+const chipName = ref('')
+const chipPreview = computed(() => {
+  if (modal.value !== 'package') return { chip: null, error: '' }
+  try {
+    return { chip: compileChip(circuit.value, chipName.value.trim()), error: '' }
+  } catch (error) {
+    return { chip: null, error: (error as Error).message }
+  }
+})
+const filteredChips = computed(() =>
+  category.value === 'all' || category.value === 'chips'
+    ? chips.value.filter((chip) => chip.name.toLowerCase().includes(search.value.toLowerCase()))
+    : [],
+)
 const nodeName = ref('')
 watch(
   () => [selectedNode.value?.id, selectedNode.value?.label],
@@ -71,6 +113,7 @@ const deleteId = ref('')
 const compactPanel = ref(false)
 const filteredParts = computed(() =>
   KINDS.filter((kind) => {
+    if (kind === 'CHIP' || category.value === 'chips') return false
     const categoryMatch =
       category.value === 'all' ||
       (category.value === 'io' ? ['INPUT', 'OUTPUT'].includes(kind) : !['INPUT', 'OUTPUT'].includes(kind))
@@ -87,18 +130,18 @@ const currentRows = computed(() =>
   level.value ? (testResult.value?.cases.length ? testResult.value.cases : expectedCases(level.value)) : [],
 )
 const selectedTruth = computed(() => {
-  const kind = selectedNode.value?.kind
-  if (!kind || kind === 'INPUT' || kind === 'OUTPUT') return []
-  return Array.from({ length: 2 ** PARTS[kind].inputs }, (_, number) => {
+  const node = selectedNode.value
+  if (!node || node.kind === 'INPUT' || node.kind === 'OUTPUT') return []
+  return Array.from({ length: 2 ** inputCount(node) }, (_, number) => {
     const bits = Array.from(
-      { length: PARTS[kind].inputs },
-      (_, i) => ((number >> (PARTS[kind].inputs - 1 - i)) & 1) as Bit,
+      { length: inputCount(node) },
+      (_, i) => ((number >> (inputCount(node) - 1 - i)) & 1) as Bit,
     )
-    return { bits, result: gateValue(kind, bits) }
+    return { bits, results: node.chip ? chipValue(node.chip, bits) : [gateValue(node.kind, bits)] }
   })
 })
 const canAdd = (kind: Kind) => !level.value || level.value.allowed.includes(kind)
-function addAtCenter(kind: Kind) {
+function freePosition() {
   const center = canvas.value?.center() ?? { x: 380, y: 220 }
   // Offset additions that would otherwise cover an existing part.
   let { x, y } = center
@@ -110,7 +153,45 @@ function addAtCenter(kind: Kind) {
     x += 32
     y += 32
   }
+  return { x, y }
+}
+function addAtCenter(kind: Kind) {
+  const { x, y } = freePosition()
   add(kind, x, y)
+}
+function chipAtCenter(id: string) {
+  const { x, y } = freePosition()
+  addChip(id, x, y)
+}
+function dragChip(event: DragEvent, id: string) {
+  event.dataTransfer?.setData('application/bitcraft-chip', id)
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = 'copy'
+}
+function requestPackage() {
+  chipName.value =
+    level.value?.id === 6
+      ? '半加器'
+      : level.value?.id === 7
+        ? '全加器'
+        : level.value?.id === 8
+          ? '选择器'
+          : name.value.slice(0, 32)
+  modal.value = 'package'
+}
+function submitPackage() {
+  if (packageChip(chipName.value)) {
+    modal.value = null
+    category.value = 'chips'
+    search.value = ''
+  }
+}
+function requestDeleteChip(id: string) {
+  deleteId.value = id
+  modal.value = 'delete-chip'
+}
+function confirmDeleteChip() {
+  deleteChip(deleteId.value)
+  modal.value = null
 }
 function dragPart(event: DragEvent, kind: Kind) {
   event.dataTransfer?.setData('application/bitcraft-part', kind)
@@ -161,7 +242,7 @@ function confirmDelete() {
   modal.value = 'works'
 }
 function nextChallenge() {
-  if (level.value && level.value.id < 6) selectLevel(level.value.id + 1)
+  if (level.value && level.value.id < LEVELS.length) selectLevel(level.value.id + 1)
   else {
     openSandbox()
     modal.value = null
@@ -191,6 +272,10 @@ function keyboard(event: KeyboardEvent) {
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
     event.preventDefault()
     requestSave()
+  }
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'd') {
+    event.preventDefault()
+    duplicateSelected()
   }
   if (event.key === 'Delete' || event.key === 'Backspace') {
     event.preventDefault()
@@ -227,7 +312,7 @@ onUnmounted(() => document.removeEventListener('keydown', keyboard))
         <button :class="{ active: activeLevel }" @click="modal = 'levels'">
           <Icon name="flag" :size="17" />
           挑战关卡
-          <span class="nav-count">{{ completed.length }}/6</span>
+          <span class="nav-count">{{ completed.length }}/{{ LEVELS.length }}</span>
         </button>
         <button :class="{ active: modal === 'works' }" @click="modal = 'works'">
           <Icon name="folder" :size="18" />
@@ -281,7 +366,7 @@ onUnmounted(() => document.removeEventListener('keydown', keyboard))
             <span class="eyebrow">YOUR TOOLBOX</span>
             <h2>
               元件盒
-              <span>06</span>
+              <span>{{ String(6 + chips.length).padStart(2, '0') }}</span>
             </h2>
           </div>
           <div class="toolbox-mark"><Icon name="grid" :size="19" /></div>
@@ -295,6 +380,7 @@ onUnmounted(() => document.removeEventListener('keydown', keyboard))
           <button :class="{ active: category === 'all' }" @click="category = 'all'">全部</button>
           <button :class="{ active: category === 'io' }" @click="category = 'io'">输入 / 输出</button>
           <button :class="{ active: category === 'logic' }" @click="category = 'logic'">逻辑门</button>
+          <button :class="{ active: category === 'chips' }" @click="category = 'chips'">芯片</button>
         </div>
         <div class="parts-list">
           <template v-for="group in ['输入 / 输出', '逻辑门']" :key="group">
@@ -332,8 +418,57 @@ onUnmounted(() => document.removeEventListener('keydown', keyboard))
               </button>
             </div>
           </template>
-          <p v-if="!filteredParts.length" class="empty-search">没有找到元件，试试 AND 或开关。</p>
+          <div v-if="category === 'all' || category === 'chips'" class="part-group chip-library">
+            <h3>
+              我的芯片
+              <span>{{ chips.length }} / 24</span>
+            </h3>
+            <div v-for="chip in filteredChips" :key="chip.id" class="chip-library-row">
+              <button
+                class="part-card"
+                :disabled="!canAdd('CHIP')"
+                :class="{ 'part-locked': !canAdd('CHIP') }"
+                :draggable="canAdd('CHIP')"
+                :aria-label="`添加芯片 ${chip.name}`"
+                :title="canAdd('CHIP') ? '点击添加，或拖入画布' : '第 7、8 关和沙盒中可用'"
+                @click="chipAtCenter(chip.id)"
+                @dragstart="dragChip($event, chip.id)"
+              >
+                <span class="part-symbol chip"><GateSymbol kind="CHIP" :size="38" /></span>
+                <span class="part-info">
+                  <strong>{{ chip.name }}</strong>
+                  <small>{{ chip.inputs.length }} IN · {{ chip.outputs.length }} OUT</small>
+                </span>
+                <Icon :name="canAdd('CHIP') ? 'plus' : 'lock'" :size="14" />
+              </button>
+              <button
+                class="chip-remove"
+                :aria-label="`移除芯片 ${chip.name}`"
+                @click="requestDeleteChip(chip.id)"
+              >
+                <Icon name="close" :size="12" />
+              </button>
+            </div>
+            <p v-if="!chips.length" class="empty-search">
+              让你的电路变成下一块积木。搭好电路后，点击下方封装。
+            </p>
+            <p v-else-if="!filteredChips.length" class="empty-search">没有找到匹配的芯片。</p>
+            <p v-if="level && !canAdd('CHIP') && chips.length" class="chip-library-note">
+              前六关练习基础逻辑，芯片从第 7 关开始可用。
+            </p>
+          </div>
+          <p
+            v-if="!filteredParts.length && category !== 'chips' && !filteredChips.length && search"
+            class="empty-search"
+          >
+            没有找到元件，试试 AND 或开关。
+          </p>
         </div>
+        <button class="package-button" @click="requestPackage">
+          <GateSymbol kind="CHIP" :size="25" />
+          封装当前电路
+          <Icon name="plus" :size="14" />
+        </button>
         <div class="toolbox-tip">
           <span class="tip-icon"><Icon name="bulb" :size="18" /></span>
           <div>
@@ -420,6 +555,7 @@ onUnmounted(() => document.removeEventListener('keydown', keyboard))
           @move-start="remember"
           @move="move"
           @add="add"
+          @add-chip="addChip"
           @notify="notify"
         />
         <footer class="workspace-footer">
@@ -610,13 +746,19 @@ onUnmounted(() => document.removeEventListener('keydown', keyboard))
             <div class="section-caption">
               <span>元件详情</span>
               <span class="inspector-state" :class="{ high: signals.get(selectedNode.id) === 1 }">
-                {{ signals.get(selectedNode.id) == null ? '未定义' : `信号 ${signals.get(selectedNode.id)}` }}
+                {{
+                  selectedNode.chip
+                    ? `${selectedNode.chip.outputs.length} 路输出`
+                    : signals.get(selectedNode.id) == null
+                      ? '未定义'
+                      : `信号 ${signals.get(selectedNode.id)}`
+                }}
               </span>
             </div>
             <div class="inspector-part">
               <div class="inspector-part-symbol"><GateSymbol :kind="selectedNode.kind" :size="48" /></div>
               <div>
-                <h2>{{ PARTS[selectedNode.kind].name }}</h2>
+                <h2>{{ selectedNode.chip?.name ?? PARTS[selectedNode.kind].name }}</h2>
                 <span class="mono">{{ PARTS[selectedNode.kind].english }}</span>
               </div>
             </div>
@@ -640,23 +782,51 @@ onUnmounted(() => document.removeEventListener('keydown', keyboard))
               <Icon name="bolt" :size="16" />
               切换为 {{ selectedNode.value === 1 ? '0 · 关闭' : '1 · 开启' }}
             </button>
-            <table v-if="selectedTruth.length" class="truth-table part-truth">
-              <thead>
-                <tr>
-                  <th>A</th>
-                  <th v-if="PARTS[selectedNode.kind].inputs === 2">B</th>
-                  <th>输出</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="(row, i) in selectedTruth" :key="i">
-                  <td v-for="(bit, index) in row.bits" :key="index">{{ bit }}</td>
-                  <td>
-                    <span :class="{ 'bit-one': row.result === 1 }">{{ row.result }}</span>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+            <div v-if="selectedNode.chip" class="chip-signals">
+              <span v-for="(port, pin) in selectedNode.chip.outputs" :key="pin">
+                {{ port }}
+                <b :class="{ 'bit-one': signals.get(signalKey(selectedNode.id, pin)) === 1 }">
+                  {{ signals.get(signalKey(selectedNode.id, pin)) ?? '?' }}
+                </b>
+              </span>
+            </div>
+            <div v-if="selectedTruth.length" class="truth-scroll">
+              <table class="truth-table part-truth">
+                <thead>
+                  <tr>
+                    <th
+                      v-for="(port, i) in selectedNode.chip?.inputs ??
+                      ['A', 'B'].slice(0, inputCount(selectedNode))"
+                      :key="`in-${i}`"
+                    >
+                      {{ port }}
+                    </th>
+                    <th v-for="(port, i) in selectedNode.chip?.outputs ?? ['输出']" :key="`out-${i}`">
+                      {{ port }}
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(row, i) in selectedTruth" :key="i">
+                    <td v-for="(bit, index) in row.bits" :key="index">{{ bit }}</td>
+                    <td v-for="(result, index) in row.results" :key="`out-${index}`">
+                      <span :class="{ 'bit-one': result === 1 }">{{ result }}</span>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <button v-if="selectedNode.chip" class="secondary-button wide-button" @click="collectChip">
+              收藏这块芯片
+            </button>
+            <button
+              v-if="!isFixedPort(level, selectedNode.id)"
+              class="secondary-button wide-button duplicate-button"
+              @click="duplicateSelected"
+            >
+              复制元件
+              <kbd>Ctrl D</kbd>
+            </button>
             <p class="inspector-note">
               <Icon name="info" :size="15" />
               {{
@@ -697,11 +867,11 @@ onUnmounted(() => document.removeEventListener('keydown', keyboard))
             <span>创造之旅</span>
             <strong>
               {{ completed.length }}
-              <small>/ 6</small>
+              <small>/ {{ LEVELS.length }}</small>
             </strong>
           </div>
           <div class="progress-track">
-            <span :style="{ width: `${(completed.length / 6) * 100}%` }"></span>
+            <span :style="{ width: `${(completed.length / LEVELS.length) * 100}%` }"></span>
           </div>
           <p>每个小突破，都通向更大的可能。</p>
         </div>
@@ -725,7 +895,7 @@ onUnmounted(() => document.removeEventListener('keydown', keyboard))
         <span class="footer-divider"></span>
         <span>
           本地工坊
-          <span class="version">v0.1</span>
+          <span class="version">v0.2</span>
         </span>
       </div>
     </footer>
@@ -749,11 +919,13 @@ onUnmounted(() => document.removeEventListener('keydown', keyboard))
   <Modal
     v-if="modal === 'levels'"
     title="每一根线，都是新起点。"
-    eyebrow="CHAPTER 01 · 数字逻辑入门"
+    eyebrow="CHAPTER 01–02 · 从逻辑门到芯片"
     wide
     @close="modal = null"
   >
-    <p class="modal-intro">六份工坊委托，从点亮一盏灯，到做出你的第一台加法器。随时探索，进度自动保存。</p>
+    <p class="modal-intro">
+      八份工坊委托，从点亮一盏灯，到封装芯片、组装全加器与信号选择器。随时探索，进度自动保存。
+    </p>
     <div class="level-grid">
       <button
         v-for="item in LEVELS"
@@ -803,6 +975,18 @@ onUnmounted(() => document.removeEventListener('keydown', keyboard))
           灰色表示 0，发光表示 1，问号表示输入尚未接通。一个输出可以连接多个输入，但每个输入只能接收一个来源。
         </p>
         <p>导线交叉不代表连接。第一版不支持组合环路；用挑战模式检验每一组输入，正确的解法可以有很多种。</p>
+        <h3>
+          <GateSymbol kind="CHIP" :size="27" />
+          从电路到芯片
+        </h3>
+        <p>
+          连接好 1–4 个输入开关、1–4
+          个输出灯后，点击「封装当前电路」。先给同侧端口起不同的名字，再在预览中确认顺序与功能表。
+        </p>
+        <p>
+          芯片库可存 24 块芯片，支持点击或拖入画布；第 7、8 关允许复用芯片。第 6 关的半加器能用来组装第 7
+          关的全加器。芯片也能再次组合封装。
+        </p>
       </section>
       <section>
         <h3>
@@ -833,6 +1017,10 @@ onUnmounted(() => document.removeEventListener('keydown', keyboard))
           <div>
             <span>保存作品</span>
             <kbd>Ctrl S</kbd>
+          </div>
+          <div>
+            <span>复制选中的元件</span>
+            <kbd>Ctrl D</kbd>
           </div>
           <div>
             <span>删除 / 取消接线</span>
@@ -977,7 +1165,9 @@ onUnmounted(() => document.removeEventListener('keydown', keyboard))
         {{ testResult?.cases.length }} 组输入全部通过。
         <br />
         {{
-          level.id === 6 ? '下一步的寄存器和计算机，正等着你来创造。' : '你又掌握了一块通向计算机的小积木。'
+          level.id >= 6
+            ? '把这个电路封装成芯片，下一次直接用上你的创造。'
+            : '你又掌握了一块通向计算机的小积木。'
         }}
       </p>
       <div class="success-pills">
@@ -993,10 +1183,81 @@ onUnmounted(() => document.removeEventListener('keydown', keyboard))
     </div>
     <div class="modal-actions">
       <button class="secondary-button" @click="modal = null">再研究一下</button>
+      <button v-if="level.id >= 6" class="secondary-button" @click="requestPackage">封装成芯片</button>
       <button class="primary-button" @click="nextChallenge">
-        {{ level.id < 6 ? '下一份挑战' : '回到自由沙盒' }}
+        {{ level.id < LEVELS.length ? '下一份挑战' : '回到自由沙盒' }}
         <Icon name="arrow" :size="17" />
       </button>
+    </div>
+  </Modal>
+  <Modal
+    v-if="modal === 'package'"
+    title="把你的创造，装进芯片。"
+    eyebrow="CHIP WORKSHOP · 封装电路"
+    @close="modal = null"
+  >
+    <p class="modal-intro">
+      输入开关成为输入引脚，输出灯成为输出引脚。每侧按画布从上到下、从左到右排列；封装前可移动端口来调整顺序。
+    </p>
+    <form @submit.prevent="submitPackage">
+      <label class="field-label">
+        芯片名称
+        <input v-model="chipName" maxlength="32" placeholder="例如：半加器" required />
+      </label>
+      <template v-if="chipPreview.chip">
+        <div class="package-preview">
+          <GateSymbol kind="CHIP" :size="64" />
+          <div>
+            <strong>{{ chipPreview.chip.name }}</strong>
+            <p>{{ chipPreview.chip.inputs.length }} 个输入 · {{ chipPreview.chip.outputs.length }} 个输出</p>
+            <small>{{ chipPreview.chip.table.length }} 组输入均已求值</small>
+          </div>
+        </div>
+        <div class="package-ports">
+          <span>输入：{{ chipPreview.chip.inputs.join(' / ') }}</span>
+          <span>输出：{{ chipPreview.chip.outputs.join(' / ') }}</span>
+        </div>
+        <div class="truth-scroll package-truth">
+          <table class="truth-table">
+            <thead>
+              <tr>
+                <th v-for="(port, i) in chipPreview.chip.inputs" :key="`in-${i}`">{{ port }}</th>
+                <th v-for="(port, i) in chipPreview.chip.outputs" :key="`out-${i}`">{{ port }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(row, i) in chipPreview.chip.table" :key="i">
+                <td v-for="(_, bit) in chipPreview.chip.inputs" :key="`in-${bit}`">
+                  {{ (i >> (chipPreview.chip.inputs.length - 1 - bit)) & 1 }}
+                </td>
+                <td v-for="(bit, j) in row" :key="`out-${j}`">
+                  <span :class="{ 'bit-one': bit === 1 }">{{ bit }}</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="inspector-note">
+          封装保存这张真值表的功能，原电路保留在工作台。需要以后修改内部电路时，请同时保存作品。
+        </p>
+      </template>
+      <p v-else class="package-error" role="status">
+        <Icon name="info" :size="18" />
+        {{ chipPreview.error }}
+      </p>
+      <div class="modal-actions">
+        <button type="button" class="secondary-button" @click="modal = null">继续搭建</button>
+        <button class="primary-button" type="submit" :disabled="!chipPreview.chip">加入芯片库</button>
+      </div>
+    </form>
+  </Modal>
+  <Modal v-if="modal === 'delete-chip'" title="移除这块芯片收藏？" @close="modal = null">
+    <p class="modal-intro">
+      芯片将从元件盒移除。作品中已放置的芯片有独立的功能副本，仍可使用，也能从元件详情重新收藏。
+    </p>
+    <div class="modal-actions">
+      <button class="secondary-button" @click="modal = null">保留芯片</button>
+      <button class="primary-button" @click="confirmDeleteChip">移除芯片</button>
     </div>
   </Modal>
 </template>

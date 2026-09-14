@@ -1,7 +1,15 @@
-export const KINDS = ['INPUT', 'OUTPUT', 'NOT', 'AND', 'OR', 'XOR'] as const
+export const KINDS = ['INPUT', 'OUTPUT', 'NOT', 'AND', 'OR', 'XOR', 'CHIP'] as const
 export type Kind = (typeof KINDS)[number]
 export type Bit = 0 | 1
 export type Signal = Bit | null
+
+/** A compiled combinational chip. Rows use binary input order, most significant input first. */
+export interface Chip {
+  name: string
+  inputs: string[]
+  outputs: string[]
+  table: Bit[][]
+}
 
 export interface CircuitNode {
   id: string
@@ -10,12 +18,14 @@ export interface CircuitNode {
   x: number
   y: number
   value: Bit
+  chip?: Chip
 }
 export interface Wire {
   id: string
   from: string
   to: string
   pin: number
+  fromPin?: number
 }
 export interface Circuit {
   nodes: CircuitNode[]
@@ -74,14 +84,58 @@ export const PARTS: Record<
     inputs: 2,
     category: '逻辑门',
   },
+  CHIP: {
+    name: '自制芯片',
+    english: 'CHIP',
+    description: '把电路的功能装进一块芯片，像积木一样反复使用。',
+    inputs: 0,
+    category: '我的芯片',
+  },
 }
 
+export function cloneChip(chip: Chip): Chip {
+  return {
+    name: chip.name,
+    inputs: [...chip.inputs],
+    outputs: [...chip.outputs],
+    table: chip.table.map((row) => [...row]),
+  }
+}
 export function cloneCircuit(circuit: Circuit): Circuit {
-  return { nodes: circuit.nodes.map((n) => ({ ...n })), wires: circuit.wires.map((w) => ({ ...w })) }
+  return {
+    nodes: circuit.nodes.map((n) => ({ ...n, ...(n.chip ? { chip: cloneChip(n.chip) } : {}) })),
+    wires: circuit.wires.map((w) => ({ ...w })),
+  }
 }
 
 export function makeNode(kind: Kind, x: number, y: number, id: string = crypto.randomUUID()): CircuitNode {
+  if (kind === 'CHIP') throw new Error('请从芯片库选择一块芯片。')
   return { id, kind, label: PARTS[kind].name, x: snap(x), y: snap(y), value: 0 }
+}
+
+export function makeChipNode(
+  chip: Chip,
+  x: number,
+  y: number,
+  id: string = crypto.randomUUID(),
+): CircuitNode {
+  const copy = parseChip(chip)
+  return { id, kind: 'CHIP', label: copy.name, x: snap(x), y: snap(y), value: 0, chip: copy }
+}
+
+export const inputCount = (node: CircuitNode) =>
+  node.kind === 'CHIP' ? node.chip!.inputs.length : PARTS[node.kind].inputs
+export const outputCount = (node: CircuitNode) =>
+  node.kind === 'CHIP' ? node.chip!.outputs.length : node.kind === 'OUTPUT' ? 0 : 1
+export const nodeHeight = (node: CircuitNode) =>
+  node.kind === 'CHIP' ? 64 + Math.max(inputCount(node), outputCount(node)) * 28 : NODE_HEIGHT
+export const signalKey = (id: string, pin = 0) => (pin === 0 ? id : `${id}:${pin}`)
+
+export function chipValue(chip: Chip, inputs: Signal[]): Signal[] {
+  if (inputs.length !== chip.inputs.length || inputs.some((v) => v === null))
+    return chip.outputs.map(() => null)
+  const index = inputs.reduce<number>((value, bit) => value * 2 + bit!, 0)
+  return [...chip.table[index]]
 }
 
 export function snap(value: number): number {
@@ -91,11 +145,14 @@ export function snap(value: number): number {
 export function pinPosition(node: CircuitNode, pin: number, output = false) {
   return {
     x: node.x + (output ? NODE_WIDTH : 0),
-    y: node.y + (output || PARTS[node.kind].inputs === 1 ? 48 : pin === 0 ? 32 : 64),
+    y:
+      node.y +
+      (node.kind === 'CHIP' ? 48 + pin * 28 : output || inputCount(node) === 1 ? 48 : pin === 0 ? 32 : 64),
   }
 }
 
 export function gateValue(kind: Kind, inputs: Signal[], value: Bit = 0): Signal {
+  if (kind === 'CHIP') return null
   if (kind === 'INPUT') return value
   if (inputs.length !== PARTS[kind].inputs || inputs.some((v) => v === null)) return null
   const a = inputs[0]
@@ -145,11 +202,13 @@ export function evaluate(
   for (const wire of circuit.wires) incoming.set(`${wire.to}:${wire.pin}`, wire)
   for (const id of topologicalOrder(circuit)) {
     const node = nodes.get(id)!
-    const inputs = Array.from({ length: PARTS[node.kind].inputs }, (_, pin) => {
+    const inputs = Array.from({ length: inputCount(node) }, (_, pin) => {
       const wire = incoming.get(`${id}:${pin}`)
-      return wire ? (signals.get(wire.from) ?? null) : null
+      return wire ? (signals.get(signalKey(wire.from, wire.fromPin)) ?? null) : null
     })
-    signals.set(id, gateValue(node.kind, inputs, overrides.get(id) ?? node.value))
+    if (node.kind === 'CHIP')
+      chipValue(node.chip!, inputs).forEach((value, pin) => signals.set(signalKey(id, pin), value))
+    else signals.set(id, gateValue(node.kind, inputs, overrides.get(id) ?? node.value))
   }
   return signals
 }
@@ -161,8 +220,9 @@ export function connectionError(circuit: Circuit, wire: Wire): string | null {
   const to = circuit.nodes.find((n) => n.id === wire.to)
   if (!from || !to) return '连接的元件不存在。'
   if (from.kind === 'OUTPUT' || to.kind === 'INPUT') return '请将输出引脚连接到输入引脚。'
-  if (!Number.isInteger(wire.pin) || wire.pin < 0 || wire.pin >= PARTS[to.kind].inputs)
-    return '这个输入引脚不存在。'
+  const fromPin = wire.fromPin ?? 0
+  if (!Number.isInteger(fromPin) || fromPin < 0 || fromPin >= outputCount(from)) return '这个输出引脚不存在。'
+  if (!Number.isInteger(wire.pin) || wire.pin < 0 || wire.pin >= inputCount(to)) return '这个输入引脚不存在。'
   if (circuit.wires.some((w) => w.to === wire.to && w.pin === wire.pin))
     return '这个输入已有导线，请先断开原来的连接。'
   try {
@@ -177,6 +237,61 @@ function object(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 const validId = (id: unknown): id is string => typeof id === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(id)
+
+export function parseChip(value: unknown): Chip {
+  if (!object(value) || typeof value.name !== 'string' || !value.name.trim() || value.name.length > 32)
+    throw new Error('芯片名称需要 1–32 个字符。')
+  const ports = (list: unknown): string[] => {
+    if (
+      !Array.isArray(list) ||
+      list.length < 1 ||
+      list.length > 4 ||
+      list.some((label) => typeof label !== 'string' || !label.trim() || label.length > 32)
+    )
+      throw new Error('芯片需要 1–4 个输入和 1–4 个输出，端口名称最多 32 个字符。')
+    const labels = list.map((label: string) => label.trim())
+    if (new Set(labels).size !== labels.length) throw new Error('同侧的芯片端口名称不能重复。')
+    return labels
+  }
+  const inputs = ports(value.inputs),
+    outputs = ports(value.outputs)
+  if (
+    !Array.isArray(value.table) ||
+    value.table.length !== 2 ** inputs.length ||
+    value.table.some(
+      (row) =>
+        !Array.isArray(row) || row.length !== outputs.length || row.some((bit) => bit !== 0 && bit !== 1),
+    )
+  )
+    throw new Error('芯片真值表不完整或包含无效信号。')
+  return { name: value.name.trim(), inputs, outputs, table: value.table.map((row) => [...row]) }
+}
+
+/** Spatial port order is shown in the packaging preview; never silently guess an incomplete output. */
+export function circuitPorts(circuit: Circuit, kind: 'INPUT' | 'OUTPUT') {
+  return circuit.nodes
+    .filter((node) => node.kind === kind)
+    .sort((a, b) => a.y - b.y || a.x - b.x || a.id.localeCompare(b.id))
+}
+export function compileChip(circuit: Circuit, name: string): Chip {
+  const safe = parseCircuit(circuit)
+  const inputs = circuitPorts(safe, 'INPUT'),
+    outputs = circuitPorts(safe, 'OUTPUT')
+  if (!inputs.length || inputs.length > 4 || !outputs.length || outputs.length > 4)
+    throw new Error('封装需要 1–4 个输入开关和 1–4 个输出灯。')
+  const table = Array.from({ length: 2 ** inputs.length }, (_, row) => {
+    const values = evaluate(
+      safe,
+      new Map(inputs.map((node, i) => [node.id, ((row >> (inputs.length - 1 - i)) & 1) as Bit])),
+    )
+    return outputs.map((node) => {
+      const value = values.get(node.id)
+      if (value == null) throw new Error(`输出「${node.label}」尚未接通，请连接好必要引脚后再封装。`)
+      return value
+    })
+  })
+  return parseChip({ name, inputs: inputs.map((n) => n.label), outputs: outputs.map((n) => n.label), table })
+}
 
 /** Rebuild known fields only. Imported files never become executable code or UI markup. */
 export function parseCircuit(value: unknown): Circuit {
@@ -207,6 +322,7 @@ export function parseCircuit(value: unknown): Circuit {
       x: node.x,
       y: node.y,
       value: node.value,
+      ...(node.kind === 'CHIP' ? { chip: parseChip(node.chip) } : {}),
     }
   })
   const result: Circuit = { nodes, wires: [] }
@@ -219,7 +335,15 @@ export function parseCircuit(value: unknown): Circuit {
       typeof valueWire.pin !== 'number'
     )
       throw new Error('导线格式无效。')
-    const wire: Wire = { id: valueWire.id, from: valueWire.from, to: valueWire.to, pin: valueWire.pin }
+    if (valueWire.fromPin !== undefined && typeof valueWire.fromPin !== 'number')
+      throw new Error('输出引脚格式无效。')
+    const wire: Wire = {
+      id: valueWire.id,
+      from: valueWire.from,
+      to: valueWire.to,
+      pin: valueWire.pin,
+      ...(valueWire.fromPin !== undefined ? { fromPin: valueWire.fromPin } : {}),
+    }
     const error = connectionError(result, wire)
     if (error) throw new Error(error)
     result.wires.push(wire)

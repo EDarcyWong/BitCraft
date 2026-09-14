@@ -10,13 +10,14 @@ import {
 import { solution } from './solutions'
 
 const state = (): StudioSave => ({
-  version: 1,
+  version: 2,
   activeLevel: 5,
   sandbox: { name: '小小工坊', circuit: starterCircuit() },
   drafts: { '5': solution(5) },
   completed: [1, 2],
   works: [{ id: 'saved-1', name: '我的作品', circuit: solution(6), savedAt: '2026-09-14T12:00:00Z' }],
   motion: false,
+  chips: [],
 })
 describe('portable files and local saves', () => {
   it('round-trips all nodes, wires, labels and positions', () => {
@@ -25,7 +26,7 @@ describe('portable files and local saves', () => {
   })
   it('rejects malformed, unknown-version and oversized files', () => {
     expect(() => parseProject('not json')).toThrow('有效的 JSON')
-    expect(() => parseProject('{"format":"bitcraft-circuit","version":2}')).toThrow('格式')
+    expect(() => parseProject('{"format":"bitcraft-circuit","version":999}')).toThrow('格式')
     expect(() => parseProject(' '.repeat(MAX_FILE_BYTES + 1))).toThrow('1 MB')
     expect(() => parseProject(exportProject({ name: '', circuit: starterCircuit() }))).toThrow('名称')
   })

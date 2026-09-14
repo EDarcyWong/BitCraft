@@ -14,6 +14,162 @@
   --green: #527358;
   --mono: 'SFMono-Regular', Consolas, monospace;
 }
+.package-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 7px;
+  flex-shrink: 0;
+  margin-top: 12px;
+  padding: 11px 10px;
+  border: 1px solid #b6c8ad;
+  border-radius: 7px;
+  background: #eaf0e3;
+  color: #486347;
+  font-size: 11px;
+  font-weight: 600;
+}
+.package-button:hover {
+  background: #dde8d4;
+}
+.chip-library-row {
+  position: relative;
+}
+.chip-library-row .part-card {
+  padding-right: 20px;
+}
+.chip-library-row .part-symbol {
+  flex-shrink: 0;
+}
+.chip-library-row .part-info {
+  min-width: 0;
+}
+.chip-library-row .part-info strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chip-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  padding: 3px;
+  color: #939b89;
+  border-radius: 4px;
+}
+.chip-remove:hover {
+  color: #af573d;
+  background: #f9e9df;
+}
+.chip-library .empty-search {
+  padding: 6px 3px;
+}
+.chip-library-note {
+  font-size: 10px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+.part-symbol.chip {
+  color: #5e7161;
+  background: #e8efe5;
+}
+.circuit-node .chip-body {
+  fill: #f1f5e9;
+  stroke: #91a28b;
+}
+.circuit-node.node-selected .chip-body {
+  stroke: var(--orange);
+}
+.pin.pin-high .pin-ring {
+  fill: #d9b257;
+  stroke: #b78b35;
+}
+.chip-signals {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+.chip-signals span {
+  background: #f0f2e9;
+  border: 1px solid var(--line);
+  padding: 5px 8px;
+  border-radius: 5px;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.chip-signals b {
+  font-family: var(--mono);
+  margin-left: 5px;
+}
+.truth-scroll {
+  overflow-x: auto;
+}
+.truth-scroll th {
+  max-width: 100px;
+  overflow-wrap: anywhere;
+}
+.duplicate-button {
+  margin-top: 12px;
+}
+.duplicate-button kbd {
+  margin-left: auto;
+  font-size: 9px;
+  color: var(--muted);
+}
+.package-preview {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 22px;
+  margin-top: 18px;
+  border: 1px solid #d5dfcc;
+  background: #eff3e8;
+  border-radius: 12px;
+  color: #536b4d;
+}
+.package-preview strong {
+  font-size: 19px;
+  overflow-wrap: anywhere;
+}
+.package-preview p {
+  font-size: 12px;
+  margin: 7px 0;
+}
+.package-preview small {
+  font-size: 10px;
+  color: #7e8d71;
+}
+.package-ports {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--green);
+  margin: 16px 0;
+  overflow-wrap: anywhere;
+}
+.package-truth {
+  max-height: 280px;
+  overflow-y: auto;
+}
+.package-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  color: #9d6041;
+  padding: 20px;
+  margin-top: 20px;
+  background: #fff4e7;
+  border: 1px solid #ecddc8;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.8;
+}
+.package-error svg {
+  flex-shrink: 0;
+  margin-top: 3px;
+}
 * {
   box-sizing: border-box;
 }
@@ -378,7 +534,7 @@ a {
 }
 .part-tabs button {
   font-size: 10px;
-  padding: 6px 7px 10px;
+  padding: 6px 4px 10px;
   border-bottom: 2px solid transparent;
   flex: 1;
   white-space: nowrap;
@@ -391,7 +547,7 @@ a {
 .parts-list {
   overflow-y: auto;
   flex: 1;
-  min-height: 180px;
+  min-height: 120px;
   scrollbar-width: thin;
   scrollbar-color: #dbe0ce transparent;
 }
