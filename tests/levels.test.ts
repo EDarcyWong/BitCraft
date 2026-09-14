@@ -3,7 +3,7 @@ import { cloneCircuit, makeNode } from '../src/core/circuit'
 import { createLevelCircuit, expectedCases, LEVELS, validateLevel } from '../src/core/levels'
 import { solution } from './solutions'
 
-describe('the six playable challenges', () => {
+describe('the eight playable challenges', () => {
   it.each(LEVELS)('accepts a working solution for $id · $title', (level) => {
     const circuit = solution(level.id),
       before = cloneCircuit(circuit)

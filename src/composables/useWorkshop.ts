@@ -1,14 +1,20 @@
 import { computed, onUnmounted, ref, watch } from 'vue'
 import {
   cloneCircuit,
+  cloneChip,
+  compileChip,
   connectionError,
   evaluate,
   makeNode,
+  makeChipNode,
+  parseChip,
+  snap,
   MAX_NODES,
   PARTS,
   starterCircuit,
   type Circuit,
   type Kind,
+  type Chip,
 } from '../core/circuit'
 import {
   createLevelCircuit,
@@ -21,12 +27,14 @@ import {
 import {
   exportProject,
   MAX_FILE_BYTES,
+  MAX_CHIPS,
   parseProject,
   parseStudioSave,
   STORAGE_KEY,
   type Project,
   type SavedWork,
   type StudioSave,
+  type SavedChip,
 } from '../core/storage'
 
 export function useWorkshop() {
@@ -54,6 +62,7 @@ export function useWorkshop() {
   const name = ref(level.value?.title ?? sandbox.value.name)
   const completed = ref<number[]>(recovered?.completed ?? [])
   const works = ref<SavedWork[]>(recovered?.works ?? [])
+  const chips = ref<SavedChip[]>(recovered?.chips ?? [])
   const motion = ref(recovered?.motion ?? !window.matchMedia('(prefers-reduced-motion: reduce)').matches)
   const signals = computed(() => evaluate(circuit.value))
   const selected = ref<string | null>(null)
@@ -91,12 +100,13 @@ export function useWorkshop() {
     }
     stash()
     const state: StudioSave = {
-      version: 1,
+      version: 2,
       activeLevel: activeLevel.value,
       sandbox: sandbox.value,
       drafts: drafts.value,
       completed: completed.value,
       works: works.value,
+      chips: chips.value,
       motion: motion.value,
     }
     try {
@@ -120,7 +130,7 @@ export function useWorkshop() {
     },
     { deep: true, flush: 'sync' },
   )
-  watch([name, motion, completed, works], scheduleSave, { deep: true })
+  watch([name, motion, completed, works, chips], scheduleSave, { deep: true })
   function select(id: string | null, wire = false) {
     selected.value = wire ? null : id
     selectedWire.value = wire ? id : null
@@ -180,6 +190,7 @@ export function useWorkshop() {
     notify('工作台已重置，可使用撤销恢复。')
   }
   function add(kind: Kind, x: number, y: number) {
+    if (kind === 'CHIP') return
     if (level.value && !level.value.allowed.includes(kind)) {
       notify('本关使用固定输入输出，请选择已解锁的逻辑门。')
       return
@@ -208,8 +219,8 @@ export function useWorkshop() {
     remember()
     node.value = node.value === 1 ? 0 : 1
   }
-  function connect(from: string, to: string, pin: number) {
-    const wire = { id: crypto.randomUUID(), from, to, pin }
+  function connect(from: string, to: string, pin: number, fromPin = 0) {
+    const wire = { id: crypto.randomUUID(), from, to, pin, fromPin }
     const error = connectionError(circuit.value, wire)
     if (error) {
       notify(error)
@@ -250,6 +261,73 @@ export function useWorkshop() {
     if (!circuit.value.wires.some((w) => w.from === id || w.to === id)) return
     remember()
     circuit.value.wires = circuit.value.wires.filter((w) => w.from !== id && w.to !== id)
+  }
+  function duplicateSelected() {
+    const node = selectedNode.value
+    if (!node || isFixedPort(level.value, node.id)) return
+    if (circuit.value.nodes.length >= MAX_NODES) return notify(`一个作品最多支持 ${MAX_NODES} 个元件。`)
+    remember()
+    const copy = cloneCircuit({ nodes: [node], wires: [] }).nodes[0]
+    copy.id = crypto.randomUUID()
+    copy.x = snap(copy.x + 32)
+    copy.y = snap(copy.y + 32)
+    circuit.value.nodes.push(copy)
+    select(copy.id)
+    notify('已复制元件，按方向键或拖动放置。')
+  }
+  function addChip(id: string, x: number, y: number) {
+    if (level.value && !level.value.allowed.includes('CHIP'))
+      return notify('自制芯片从第 7 关开始可用，也可在沙盒自由使用。')
+    const chip = chips.value.find((item) => item.id === id)
+    if (!chip) return
+    if (circuit.value.nodes.length >= MAX_NODES) return notify(`一个作品最多支持 ${MAX_NODES} 个元件。`)
+    const node = makeChipNode(chip, x, y)
+    remember()
+    circuit.value.nodes.push(node)
+    select(node.id)
+  }
+  function saveChip(chip: Chip) {
+    try {
+      chip = parseChip(chip)
+    } catch (error) {
+      notify((error as Error).message)
+      return false
+    }
+    if (chips.value.length >= MAX_CHIPS) {
+      notify('芯片库已满（24 个），请先移除不需要的芯片。')
+      return false
+    }
+    if (chips.value.some((item) => item.name === chip.name)) {
+      notify('芯片库中已有这个名称，请换个名字。')
+      return false
+    }
+    chips.value.push({ ...cloneChip(chip), id: crypto.randomUUID() })
+    flushSave()
+    notify(
+      savedState.value === 'saved'
+        ? `「${chip.name}」已加入芯片库，可以反复搭建了。`
+        : '芯片已加入本次芯片库，但本地保存失败。请将芯片放入作品并导出。',
+    )
+    return true
+  }
+  function packageChip(title: string) {
+    try {
+      return saveChip(compileChip(circuit.value, title.trim()))
+    } catch (error) {
+      notify((error as Error).message)
+      return false
+    }
+  }
+  function collectChip() {
+    if (!selectedNode.value?.chip) return
+    const chip = cloneChip(selectedNode.value.chip)
+    chip.name = selectedNode.value.label
+    saveChip(chip)
+  }
+  function deleteChip(id: string) {
+    chips.value = chips.value.filter((chip) => chip.id !== id)
+    flushSave()
+    notify('已移除芯片收藏，作品中放置的芯片继续正常工作。')
   }
   function runTests() {
     if (!level.value) return
@@ -362,6 +440,7 @@ export function useWorkshop() {
     name,
     completed,
     works,
+    chips,
     motion,
     signals,
     selected,
@@ -390,6 +469,11 @@ export function useWorkshop() {
     removeSelected,
     renameNode,
     disconnectNode,
+    duplicateSelected,
+    addChip,
+    packageChip,
+    collectChip,
+    deleteChip,
     runTests,
     applyTestInputs,
     saveWork,

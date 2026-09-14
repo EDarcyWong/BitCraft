@@ -31,6 +31,11 @@ defineProps<{ kind: Kind; size?: number }>()
       <circle cx="36" cy="22" r="6" fill="currentColor" stroke="none" />
       <path d="M48 22h8" />
     </template>
+    <template v-else-if="kind === 'CHIP'">
+      <rect x="15" y="6" width="30" height="30" rx="4" />
+      <path d="M5 13h10M5 21h10M5 29h10m30-16h10m-10 8h10m-10 8h10M24 6V1m12 5V1M24 36v5m12-5v5" />
+      <path d="M24 15h12v12H24z" />
+    </template>
     <template v-else>
       <path d="M24 31h12m-10 5h8M22 26a13 13 0 1 1 16 0l-2 5H24z" />
       <path d="M30 1v-3M12 7 8 3m40 4 4-4" />

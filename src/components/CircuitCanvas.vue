@@ -5,6 +5,10 @@ import {
   NODE_HEIGHT,
   NODE_WIDTH,
   PARTS,
+  inputCount,
+  outputCount,
+  nodeHeight,
+  signalKey,
   pinPosition,
   snap,
   type Circuit,
@@ -28,11 +32,12 @@ const props = defineProps<{
 const emit = defineEmits<{
   select: [id: string | null, wire?: boolean]
   toggle: [id: string]
-  connect: [from: string, to: string, pin: number]
+  connect: [from: string, to: string, pin: number, fromPin: number]
   'move-start': []
   move: [id: string, x: number, y: number]
   'move-end': []
   add: [kind: Kind, x: number, y: number]
+  'add-chip': [id: string, x: number, y: number]
   notify: [message: string]
 }>()
 const svg = ref<SVGSVGElement>()
@@ -54,7 +59,6 @@ let observer: ResizeObserver | undefined
 const nodes = computed(() => new Map(props.circuit.nodes.map((n) => [n.id, n])))
 const gridSize = computed(() => GRID * view.value.scale)
 const signalText = (signal: Signal | undefined) => (signal == null ? '?' : signal)
-const wireSignal = (from: string) => props.signals.get(from) ?? null
 
 function pathBetween(start: { x: number; y: number }, end: { x: number; y: number }) {
   const distance = Math.max(48, Math.abs(end.x - start.x) * 0.5)
@@ -66,8 +70,8 @@ const paths = computed(() =>
       target = nodes.value.get(wire.to)!
     return {
       ...wire,
-      path: pathBetween(pinPosition(source, 0, true), pinPosition(target, wire.pin)),
-      signal: wireSignal(wire.from),
+      path: pathBetween(pinPosition(source, wire.fromPin ?? 0, true), pinPosition(target, wire.pin)),
+      signal: props.signals.get(signalKey(wire.from, wire.fromPin)) ?? null,
     }
   }),
 )
@@ -101,7 +105,7 @@ function fit() {
   const minX = Math.min(...list.map((n) => n.x)) - 100,
     minY = Math.min(...list.map((n) => n.y)) - 100
   const width = Math.max(...list.map((n) => n.x)) + NODE_WIDTH + 100 - minX
-  const height = Math.max(...list.map((n) => n.y)) + NODE_HEIGHT + 100 - minY
+  const height = Math.max(...list.map((n) => n.y + nodeHeight(n))) + 100 - minY
   const scale = Math.max(
     0.06,
     Math.min(1.1, dimensions.value.width / width, (dimensions.value.height - 80) / height),
@@ -189,6 +193,7 @@ function finishPin(target: Pending) {
     source.output ? source.id : target.id,
     source.output ? target.id : source.id,
     source.output ? target.pin : source.pin,
+    source.output ? source.pin : target.pin,
   )
   pending.value = null
 }
@@ -247,6 +252,12 @@ function moveWithKeys(event: KeyboardEvent, node: CircuitNode) {
   emit('move-end')
 }
 function drop(event: DragEvent) {
+  const chipId = event.dataTransfer?.getData('application/bitcraft-chip')
+  if (chipId) {
+    const point = toWorld(event.clientX, event.clientY)
+    emit('add-chip', chipId, point.x - NODE_WIDTH / 2, point.y - NODE_HEIGHT / 2)
+    return
+  }
   const kind = event.dataTransfer?.getData('application/bitcraft-part') as Kind
   if (!Object.hasOwn(PARTS, kind)) return
   const point = toWorld(event.clientX, event.clientY)
@@ -372,12 +383,18 @@ defineExpose({ fit, center, cancelInteraction })
           @keydown="moveWithKeys($event, node)"
           @keydown.enter.prevent="emit('select', node.id)"
         >
-          <rect class="node-shadow" x="0" y="4" :width="NODE_WIDTH" :height="NODE_HEIGHT" rx="12" />
-          <rect class="node-body" :width="NODE_WIDTH" :height="NODE_HEIGHT" rx="12" />
+          <rect class="node-shadow" x="0" y="4" :width="NODE_WIDTH" :height="nodeHeight(node)" rx="12" />
+          <rect
+            class="node-body"
+            :class="{ 'chip-body': node.kind === 'CHIP' }"
+            :width="NODE_WIDTH"
+            :height="nodeHeight(node)"
+            rx="12"
+          />
           <text x="14" y="21" class="node-label">
             {{ node.label.length > 11 ? node.label.slice(0, 10) + '…' : node.label }}
           </text>
-          <text x="129" y="21" class="node-signal" text-anchor="end">
+          <text v-if="node.kind !== 'CHIP'" x="129" y="21" class="node-signal" text-anchor="end">
             {{ signalText(signals.get(node.id)) }}
           </text>
           <template v-if="node.kind === 'INPUT'">
@@ -404,20 +421,27 @@ defineExpose({ fit, center, cancelInteraction })
             <circle cx="72" cy="46" r="15" class="lamp-bulb" />
             <path d="m67 44 5 5 5-5m-5 5v11m-6 1h12m-10 4h8" class="lamp-filament" />
           </template>
-          <GateSymbol v-else :kind="node.kind" :size="54" x="45" y="30" class="node-gate-symbol" />
-          <text x="72" y="83" text-anchor="middle" class="node-kind">
+          <GateSymbol
+            v-else-if="node.kind !== 'CHIP'"
+            :kind="node.kind"
+            :size="54"
+            x="45"
+            y="30"
+            class="node-gate-symbol"
+          />
+          <text x="72" :y="nodeHeight(node) - 13" text-anchor="middle" class="node-kind">
             {{ PARTS[node.kind].english }}
             <template v-if="isFixedPort(level, node.id)">· 固定</template>
           </text>
           <g
-            v-for="(_, pin) in PARTS[node.kind].inputs"
+            v-for="(_, pin) in inputCount(node)"
             :key="pin"
-            :transform="`translate(0, ${PARTS[node.kind].inputs === 1 ? 48 : pin === 0 ? 32 : 64})`"
+            :transform="`translate(0, ${pinPosition(node, pin).y - node.y})`"
             class="pin"
             :class="{ 'pin-pending': pending?.id === node.id && !pending.output && pending.pin === pin }"
             role="button"
             tabindex="0"
-            :aria-label="`${node.label} 输入 ${pin + 1}`"
+            :aria-label="`${node.label} 输入 ${pin + 1}${node.chip ? ' ' + node.chip.inputs[pin] : ''}`"
             :data-pin-node="node.id"
             :data-pin-index="pin"
             data-output="false"
@@ -427,27 +451,34 @@ defineExpose({ fit, center, cancelInteraction })
           >
             <circle r="13" class="pin-hit" />
             <circle r="5.5" class="pin-ring" />
-            <text v-if="PARTS[node.kind].inputs > 1" x="11" y="4" class="pin-caption">
-              {{ pin === 0 ? 'A' : 'B' }}
+            <text v-if="inputCount(node) > 1 || node.chip" x="11" y="4" class="pin-caption">
+              {{ node.chip ? node.chip.inputs[pin].slice(0, 5) : pin === 0 ? 'A' : 'B' }}
             </text>
           </g>
           <g
-            v-if="node.kind !== 'OUTPUT'"
-            :transform="`translate(${NODE_WIDTH}, 48)`"
+            v-for="(_, pin) in outputCount(node)"
+            :key="`out-${pin}`"
+            :transform="`translate(${NODE_WIDTH}, ${pinPosition(node, pin, true).y - node.y})`"
             class="pin"
-            :class="{ 'pin-pending': pending?.id === node.id && pending.output }"
+            :class="{
+              'pin-pending': pending?.id === node.id && pending.output && pending.pin === pin,
+              'pin-high': signals.get(signalKey(node.id, pin)) === 1,
+            }"
             role="button"
             tabindex="0"
-            :aria-label="`${node.label} 输出`"
+            :aria-label="`${node.label} 输出${node.chip ? ' ' + (pin + 1) + ' ' + node.chip.outputs[pin] : ''}`"
             :data-pin-node="node.id"
-            data-pin-index="0"
+            :data-pin-index="pin"
             data-output="true"
-            @pointerdown.stop.prevent="pinDown($event, { id: node.id, output: true, pin: 0 })"
-            @keydown.enter.prevent.stop="finishPin({ id: node.id, output: true, pin: 0 })"
-            @keydown.space.prevent.stop="finishPin({ id: node.id, output: true, pin: 0 })"
+            @pointerdown.stop.prevent="pinDown($event, { id: node.id, output: true, pin })"
+            @keydown.enter.prevent.stop="finishPin({ id: node.id, output: true, pin })"
+            @keydown.space.prevent.stop="finishPin({ id: node.id, output: true, pin })"
           >
             <circle r="13" class="pin-hit" />
             <circle r="5.5" class="pin-ring" />
+            <text v-if="node.chip" x="-11" y="4" text-anchor="end" class="pin-caption">
+              {{ node.chip.outputs[pin].slice(0, 5) }}:{{ signalText(signals.get(signalKey(node.id, pin))) }}
+            </text>
           </g>
         </g>
       </g>
